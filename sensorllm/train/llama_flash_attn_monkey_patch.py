@@ -1,14 +1,30 @@
 # Adopted from https://github.com/lm-sys/FastChat. Below is the original copyright:
+import os
+import warnings
+import torch
+
+
 import warnings
 from typing import Optional, Tuple
 
 import torch
-from flash_attn import __version__ as flash_attn_version
-from flash_attn.bert_padding import pad_input, unpad_input
-from flash_attn.flash_attn_interface import (
-    flash_attn_func,
-    flash_attn_varlen_kvpacked_func,
-)
+
+
+DISABLE_FLASH = os.getenv("DISABLE_FLASH_ATTN", "0") == "1"
+
+FLASH_ATTN_AVAILABLE = False
+if not DISABLE_FLASH:
+    try:
+        from flash_attn import __version__ as flash_attn_version
+        from flash_attn.bert_padding import pad_input, unpad_input
+        from flash_attn.flash_attn_interface import (
+            flash_attn_func,
+            flash_attn_varlen_kvpacked_func,
+        )
+        FLASH_ATTN_AVAILABLE = True
+    except Exception as e:
+        warnings.warn(f"Flash-Attention not available, falling back to standard attention. Reason: {e}")
+
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaModel,
@@ -131,15 +147,20 @@ def _prepare_decoder_attention_mask(
 
 
 def replace_llama_attn_with_flash_attn():
+    if not FLASH_ATTN_AVAILABLE:
+        warnings.warn("Flash-Attention disabled or unavailable. Using standard HuggingFace LLaMA attention.")
+        return
+
     cuda_major, cuda_minor = torch.cuda.get_device_capability()
     if cuda_major < 8:
         warnings.warn(
-            "Flash attention is only supported on A100 or H100 GPU during training due to head dim > 64 backward."
-            "ref: https://github.com/HazyResearch/flash-attention/issues/190#issuecomment-1523359593"
+            "Flash attention is only supported on A100/H100 class GPUs. Falling back."
         )
+        return
 
     LlamaModel._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
     LlamaAttention.forward = forward
+
 
 
 def test():
